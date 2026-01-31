@@ -46,7 +46,7 @@ export async function POST(
       });
     } else if (action === 'execute') {
       // Execute rebalancing
-      const { rebalanceId } = body;
+      const { rebalanceId, useIBKR } = body;
       
       if (!rebalanceId) {
         return NextResponse.json(
@@ -55,12 +55,32 @@ export async function POST(
         );
       }
       
-      await executeRebalancing(rebalanceId, params.id);
-      
-      return NextResponse.json({
-        success: true,
-        message: 'Rebalancing executed successfully'
-      });
+      try {
+        await executeRebalancing(rebalanceId, params.id, { useIBKR });
+        
+        return NextResponse.json({
+          success: true,
+          message: useIBKR !== false 
+            ? 'Rebalancing executed via IBKR' 
+            : 'Rebalancing executed (mock mode)'
+        });
+      } catch (error) {
+        // Handle IBKR-specific errors
+        const errorMessage = error instanceof Error ? error.message : 'Execution failed';
+        
+        if (errorMessage.includes('Not connected to IBKR')) {
+          return NextResponse.json(
+            { 
+              error: 'IBKR connection required',
+              message: errorMessage,
+              suggestion: 'Connect to IBKR first via POST /api/ibkr/connect or set useIBKR: false for mock execution'
+            },
+            { status: 400 }
+          );
+        }
+        
+        throw error;
+      }
     } else {
       return NextResponse.json(
         { error: 'Invalid action. Use "calculate" or "execute"' },
@@ -69,9 +89,18 @@ export async function POST(
     }
   } catch (error) {
     console.error('Rebalancing error:', error);
+    
+    // Handle specific error types
+    const errorMessage = error instanceof Error ? error.message : 'Failed to process rebalancing';
+    const statusCode = errorMessage.includes('not found') ? 404 : 
+                       errorMessage.includes('required') ? 400 : 500;
+    
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to process rebalancing' },
-      { status: 500 }
+      { 
+        error: errorMessage,
+        timestamp: new Date().toISOString()
+      },
+      { status: statusCode }
     );
   }
 }

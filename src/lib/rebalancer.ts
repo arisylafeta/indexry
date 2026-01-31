@@ -2,6 +2,7 @@ import { getDB } from './db';
 import { getMarketPrices } from './marketData';
 import { createTrade, updateTradeStatus } from './trades';
 import { updateHolding } from './holdings';
+import { getIBKRClient } from './ibkr';
 import { Index, Holding, Order, Trade } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -116,9 +117,11 @@ export async function calculateRebalancing(
 
 export async function executeRebalancing(
   rebalanceId: string,
-  indexId: string
+  indexId: string,
+  options: { useIBKR?: boolean } = {}
 ): Promise<void> {
   const db = await getDB();
+  const useIBKR = options.useIBKR !== false; // Default to true
   
   // Get rebalancing record
   const rebalancing = await db.get(
@@ -136,50 +139,89 @@ export async function executeRebalancing(
     [rebalanceId, 'pending']
   );
   
-  // Execute each trade (mock execution for now)
+  // Get IBKR client if using real orders
+  let ibkrClient = null;
+  if (useIBKR) {
+    ibkrClient = getIBKRClient();
+    const status = ibkrClient.getStatus();
+    if (status.status !== 'connected') {
+      throw new Error('Not connected to IBKR. Please connect first via /api/ibkr/connect');
+    }
+  }
+  
+  // Execute each trade
   for (const trade of trades) {
     const price = await getMarketPrice(trade.symbol);
     if (!price) continue;
     
+    let ibkrOrderId: string | undefined;
+    let executionStatus = 'filled';
+    let executionError: string | undefined;
+    
+    try {
+      if (useIBKR && ibkrClient) {
+        // Place real order through IBKR
+        const orderResult = await ibkrClient.placeOrder({
+          symbol: trade.symbol,
+          side: trade.side as 'buy' | 'sell',
+          quantity: trade.quantity,
+          orderType: 'market'
+        });
+        ibkrOrderId = orderResult.orderId;
+        executionStatus = orderResult.status === 'submitted' ? 'submitted' : 'filled';
+      } else {
+        // Mock execution
+        ibkrOrderId = `mock_${Date.now()}_${trade.id}`;
+      }
+    } catch (error) {
+      executionStatus = 'error';
+      executionError = error instanceof Error ? error.message : 'Order placement failed';
+      console.error(`Failed to place order for ${trade.symbol}:`, error);
+    }
+    
     // Update trade status
-    await updateTradeStatus(trade.id, 'filled', {
+    await updateTradeStatus(trade.id, executionStatus as 'filled' | 'submitted' | 'error', {
       price,
-      ibkrOrderId: `mock_${Date.now()}_${trade.id}`
+      ibkrOrderId,
+      error: executionError
     });
     
-    // Update holdings
-    const holding = await db.get(
-      'SELECT * FROM holdings WHERE index_id = ? AND symbol = ?',
-      [indexId, trade.symbol]
-    );
-    
-    if (trade.side === 'buy') {
-      if (holding) {
-        await updateHolding(indexId, trade.symbol, {
-          quantity: holding.quantity + trade.quantity,
-          lastPrice: price,
-          marketValue: (holding.quantity + trade.quantity) * price
-        });
+    // Only update holdings if trade succeeded or is in mock mode
+    if (executionStatus !== 'error') {
+      // Update holdings
+      const holding = await db.get(
+        'SELECT * FROM holdings WHERE index_id = ? AND symbol = ?',
+        [indexId, trade.symbol]
+      );
+      
+      if (trade.side === 'buy') {
+        if (holding) {
+          await updateHolding(indexId, trade.symbol, {
+            quantity: holding.quantity + trade.quantity,
+            lastPrice: price,
+            marketValue: (holding.quantity + trade.quantity) * price
+          });
+        } else {
+          // Create new holding
+          const holdingId = uuidv4();
+          await db.run(
+            `INSERT INTO holdings (id, index_id, symbol, quantity, last_price, market_value, target_weight) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [holdingId, indexId, trade.symbol, trade.quantity, price, trade.quantity * price, 0]
+          );
+        }
       } else {
-        // Create new holding
-        const holdingId = uuidv4();
-        await db.run(
-          `INSERT INTO holdings (id, index_id, symbol, quantity, last_price, market_value, target_weight) 
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [holdingId, indexId, trade.symbol, trade.quantity, price, trade.quantity * price, 0]
-        );
-      }
-    } else {
-      // Sell
-      if (holding && holding.quantity > trade.quantity) {
-        await updateHolding(indexId, trade.symbol, {
-          quantity: holding.quantity - trade.quantity,
-          lastPrice: price,
-          marketValue: (holding.quantity - trade.quantity) * price
-        });
-      } else if (holding) {
-        // Remove holding completely
-        await db.run('DELETE FROM holdings WHERE id = ?', holding.id);
+        // Sell
+        if (holding && holding.quantity > trade.quantity) {
+          await updateHolding(indexId, trade.symbol, {
+            quantity: holding.quantity - trade.quantity,
+            lastPrice: price,
+            marketValue: (holding.quantity - trade.quantity) * price
+          });
+        } else if (holding) {
+          // Remove holding completely
+          await db.run('DELETE FROM holdings WHERE id = ?', holding.id);
+        }
       }
     }
   }
