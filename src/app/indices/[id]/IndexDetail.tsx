@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import TradingViewChart from '@/components/TradingViewChart';
+import RebalanceButton from '@/components/RebalanceButton';
 import { Index, Holding } from '@/types';
 
 export default function IndexDetail({ indexId }: { indexId: string }) {
@@ -83,7 +84,7 @@ export default function IndexDetail({ indexId }: { indexId: string }) {
             {holdings.length === 0 ? (
               <p className="text-gray-500">No holdings yet. Rebalance to add positions.</p>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-3 mb-4">
                 {holdings.map((holding) => (
                   <div key={holding.id} className="flex justify-between items-center py-2 border-b border-gray-100">
                     <div>
@@ -98,6 +99,11 @@ export default function IndexDetail({ indexId }: { indexId: string }) {
                 ))}
               </div>
             )}
+            
+            <RebalanceButton 
+              indexId={indexId} 
+              onRebalanceComplete={fetchHoldings}
+            />
           </div>
         </div>
       </div>

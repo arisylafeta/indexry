@@ -45,7 +45,12 @@
 - ✅ Holdings updates on trade execution
 - ✅ /api/indices/[id]/rebalance with calculate/execute actions
 
+## 2026-01-31 19:13 UTC - Rebalancing UI
+- ✅ RebalanceButton component with calculate/execute flow
+- ✅ Integrated into IndexDetail page
+- ✅ Holdings refresh after rebalancing
+
 ## Next Tasks
-- [ ] Push updates to GitHub
-- [ ] UI for rebalancing workflow
+- [x] Push updates to GitHub
+- [x] UI for rebalancing workflow
 - [ ] Testing with IBKR paper trading
