@@ -39,7 +39,13 @@
 - ✅ /api/market/prices endpoint
 - ✅ Mock price generation (for testing)
 
+## 2026-01-31 19:03 UTC - Rebalancing & Error Handling
+- ✅ Rebalancing execution logic (calculate + execute)
+- ✅ ErrorBoundary component
+- ✅ Holdings updates on trade execution
+- ✅ /api/indices/[id]/rebalance with calculate/execute actions
+
 ## Next Tasks
-- [ ] Rebalancing execution logic
-- [ ] Add error boundaries
 - [ ] Push updates to GitHub
+- [ ] UI for rebalancing workflow
+- [ ] Testing with IBKR paper trading

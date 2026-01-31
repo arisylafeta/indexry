@@ -1,47 +1,76 @@
 import { NextResponse } from 'next/server';
 import { getDB } from '@/lib/db';
-import { v4 as uuidv4 } from 'uuid';
+import { calculateRebalancing, executeRebalancing } from '@/lib/rebalancer';
+import { getIndex } from '@/lib/indices';
+import { getHoldings } from '@/lib/holdings';
 
 export async function POST(
   request: Request,
   { params }: { params: { id: string } }
 ) {
   try {
-    const db = await getDB();
-    const { orders } = await request.json();
+    const index = await getIndex(params.id);
     
-    if (!orders || !Array.isArray(orders) || orders.length === 0) {
+    if (!index) {
       return NextResponse.json(
-        { error: 'Orders array is required' },
+        { error: 'Index not found' },
+        { status: 404 }
+      );
+    }
+    
+    const body = await request.json();
+    const { action } = body;
+    
+    if (action === 'calculate') {
+      // Calculate rebalancing orders
+      const holdings = await getHoldings(params.id);
+      
+      // Parse rules to get target symbols
+      let targetSymbols: string[] = [];
+      for (const rule of index.rules) {
+        if (rule.type === 'manual' && rule.config.symbols) {
+          targetSymbols = rule.config.symbols as string[];
+        } else if (rule.type === 'top_n' && rule.config.count) {
+          // For now, use mock symbols for top_n
+          targetSymbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'JPM', 'V', 'WMT'];
+        }
+      }
+      
+      const result = await calculateRebalancing(index, holdings, targetSymbols);
+      
+      return NextResponse.json({
+        rebalanceId: result.rebalanceId,
+        orders: result.orders,
+        totalValue: result.totalValue,
+        targetAllocations: Object.fromEntries(result.targetAllocations)
+      });
+    } else if (action === 'execute') {
+      // Execute rebalancing
+      const { rebalanceId } = body;
+      
+      if (!rebalanceId) {
+        return NextResponse.json(
+          { error: 'rebalanceId is required' },
+          { status: 400 }
+        );
+      }
+      
+      await executeRebalancing(rebalanceId, params.id);
+      
+      return NextResponse.json({
+        success: true,
+        message: 'Rebalancing executed successfully'
+      });
+    } else {
+      return NextResponse.json(
+        { error: 'Invalid action. Use "calculate" or "execute"' },
         { status: 400 }
       );
     }
-    
-    // Create rebalancing record
-    const rebalanceId = uuidv4();
-    await db.run(
-      'INSERT INTO rebalancing (id, index_id, status, orders) VALUES (?, ?, ?, ?)',
-      [rebalanceId, params.id, 'pending', JSON.stringify(orders)]
-    );
-    
-    // Create trade records
-    for (const order of orders) {
-      const tradeId = uuidv4();
-      await db.run(
-        'INSERT INTO trades (id, index_id, rebalance_id, symbol, side, quantity, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [tradeId, params.id, rebalanceId, order.symbol, order.side, order.quantity, 'pending']
-      );
-    }
-    
-    return NextResponse.json({ 
-      rebalanceId,
-      status: 'pending',
-      message: 'Rebalancing created. Connect to IBKR to execute.'
-    }, { status: 201 });
   } catch (error) {
-    console.error('Error creating rebalancing:', error);
+    console.error('Rebalancing error:', error);
     return NextResponse.json(
-      { error: 'Failed to create rebalancing' },
+      { error: error instanceof Error ? error.message : 'Failed to process rebalancing' },
       { status: 500 }
     );
   }
